@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Team Lima Micromouse 3D</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent; /* Change to #1c223d if you want a solid dark background */
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    #viewer { width: 100%; height: 100%; display: block; cursor: grab; }
+    #viewer:active { cursor: grabbing; }
+    #status {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: #666;
+      font-size: 14px;
+      pointer-events: none;
+    }
+    #hint {
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(20, 24, 38, 0.72);
+      color: #fff;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      pointer-events: none;
+      user-select: none;
+    }
+  </style>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="status">Loading 3D model...</div>
+  <div id="hint">Drag to rotate · Scroll to zoom</div>
+  <canvas id="viewer"></canvas>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+    const canvas = document.getElementById('viewer');
+    const statusEl = document.getElementById('status');
+
+    // Renderer
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    // Scene & subtle studio reflections (keeps metallic parts crisp)
+    const scene = new THREE.Scene();
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environmentIntensity = 0.55;
+
+    // Camera
+    const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.05, 100);
+    camera.position.set(1.8, 1.5, 2.4);
+
+    // Controls
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.enablePan = false;
+    controls.enableZoom = true; // Set to false if scroll-zoom interferes with scrolling your Divi page
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 1.4;
+    controls.maxPolarAngle = Math.PI / 2 - 0.04; // Prevent going underneath the floor
+
+    // Lighting
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x44485a, 0.8);
+    scene.add(hemiLight);
+
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.6);
+    keyLight.position.set(3, 5, 4);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.set(1024, 1024);
+    keyLight.shadow.bias = -0.0005;
+    scene.add(keyLight);
+
+    const rimLight = new THREE.DirectionalLight(0xcce0ff, 0.7);
+    rimLight.position.set(-3, 3, -4);
+    scene.add(rimLight);
+
+    // Transparent floor that only receives a soft contact shadow
+    const shadowPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(10, 10),
+      new THREE.ShadowMaterial({ opacity: 0.22 })
+    );
+    shadowPlane.rotation.x = -Math.PI / 2;
+    shadowPlane.receiveShadow = true;
+    scene.add(shadowPlane);
+
+    // Load Micromouse GLB
+    let wheelLeft = null;
+    let wheelRight = null;
+
+    const loader = new GLTFLoader();
+    loader.load(
+      './micromouse.glb',
+      (gltf) => {
+        const model = gltf.scene;
+
+        model.traverse((child) => {
+          if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+          if (child.name === 'Wheel_Left') wheelLeft = child;
+          if (child.name === 'Wheel_Right') wheelRight = child;
+        });
+
+        // Auto-center X/Z and place bottom flush on Y = 0
+        const box = new THREE.Box3().setFromObject(model);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+
+        model.position.x -= center.x;
+        model.position.z -= center.z;
+        model.position.y -= box.min.y;
+        scene.add(model);
+
+        // Fit camera cleanly to the model
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const dist = maxDim * 1.9;
+        camera.position.set(dist * 0.65, dist * 0.55, dist * 0.9);
+        controls.target.set(0, size.y * 0.45, 0);
+        controls.minDistance = maxDim * 1.1;
+        controls.maxDistance = maxDim * 3.8;
+        controls.update();
+
+        statusEl.style.display = 'none';
+      },
+      undefined,
+      (error) => {
+        console.error(error);
+        statusEl.textContent = 'Failed to load micromouse.glb — check filename and case sensitivity.';
+      }
+    );
+
+    // Resize handler
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // Animation loop
+    const clock = new THREE.Clock();
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = clock.getDelta();
+
+      if (wheelLeft) wheelLeft.rotation.x += dt * 1.8;
+      if (wheelRight) wheelRight.rotation.x += dt * 1.8;
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>
